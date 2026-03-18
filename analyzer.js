@@ -61,7 +61,7 @@ async function parseSQX(arrayBuffer, filename) {
 
   const rg = doc.querySelector('[ResultName]');
   const rawName = rg ? rg.getAttribute('ResultName') : filename;
-  const meta = extractMeta(rawName, runs[0]);
+  const meta = extractMeta(rawName, runs[0], doc);
 
   const allRuns = [];
   for (const run of runs) {
@@ -125,11 +125,38 @@ function tsDate(e) {
   try { return new Date(e*1000).toISOString().slice(0,7); } catch { return '—'; }
 }
 
-function extractMeta(rawName, firstRun) {
-  const pairM = rawName.match(/(XAUUSD|BTCUSD|[A-Z]{6}|US30|NAS100|SP500)/i);
-  const pair  = pairM ? pairM[1].toUpperCase() : '—';
-  const tfM   = rawName.match(/H(\d+)|M(\d+)|_H4|_H1/i);
-  const tf    = tfM ? tfM[0].replace('_','').toUpperCase() : '—';
+function extractMeta(rawName, firstRun, doc) {
+  // Try to read symbol and TF directly from XML (most reliable)
+  let pair = '—', tf = '—';
+  
+  // Method 1: <Symbol uSymbol="USDJPY"> or <Chart symbol="USDJPY_UTC2" timeframe="H4">
+  if (doc) {
+    const symEl = doc.querySelector('Symbol[uSymbol]');
+    if (symEl) pair = symEl.getAttribute('uSymbol') || '—';
+    
+    const chartEl = doc.querySelector('Chart[timeframe]');
+    if (chartEl) {
+      tf = chartEl.getAttribute('timeframe') || '—';
+      if (!symEl) {
+        // Fallback: extract from symbol attr e.g. USDJPY_UTC2 → USDJPY
+        const sym = chartEl.getAttribute('symbol') || '';
+        const m = sym.match(/^([A-Z0-9]+?)(?:_|$)/);
+        if (m) pair = m[1];
+      }
+    }
+  }
+
+  // Method 2: fallback from filename/resultName
+  if (pair === '—') {
+    const pairM = rawName.match(/(XAUUSD|BTCUSD|XAGUSD|[A-Z]{6}|US30|NAS100|SP500|DAX|GOLD)/i);
+    if (pairM) pair = pairM[1].toUpperCase();
+  }
+  if (tf === '—') {
+    const tfM = rawName.match(/[_\s](H\d+|M\d+|D1|W1)[_\s]/i) ||
+                rawName.match(/(H4|H1|M15|M5|M30|D1)/i);
+    if (tfM) tf = tfM[1].toUpperCase();
+  }
+
   let dateRange = '—';
   if (firstRun) {
     const ps = [...firstRun.querySelectorAll('Periods > WalkForwardPeriod')]
@@ -216,15 +243,25 @@ function getZoneInfo(runs) {
     zoneValid.add(r.name);
   }
 
-  // Fallback: if no run passes the strict central test, use the allZoneCells
-  // but exclude border runs
-  const finalValid = zoneValid.size > 0 ? zoneValid : 
-    new Set([...allZoneCells].filter(name => {
+  // If no run passes the strict 4-neighbor test, progressively relax:
+  // Fallback 1: non-border runs that are in any valid 2x2 zone
+  // Fallback 2: any non-border run (no zone constraint)
+  let finalValid = zoneValid;
+  if (finalValid.size === 0) {
+    finalValid = new Set([...allZoneCells].filter(name => {
       const r = runs.find(x=>x.name===name);
       if(!r) return false;
       const ri=runsList.indexOf(r.nRuns), oi=oosList.indexOf(r.oosPct);
       return ri>0&&ri<runsList.length-1&&oi>0&&oi<oosList.length-1;
     }));
+  }
+  if (finalValid.size === 0) {
+    // Last resort: any non-border run
+    runs.filter(r => {
+      const ri=runsList.indexOf(r.nRuns), oi=oosList.indexOf(r.oosPct);
+      return ri>0&&ri<runsList.length-1&&oi>0&&oi<oosList.length-1;
+    }).forEach(r => finalValid.add(r.name));
+  }
 
   return {zoneValid:finalValid, allZoneCells, zoneScores, threshold, oosList, runsList};
 }
