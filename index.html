@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' https:; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com 'self'">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SQX Analyzer v3 — WF Matrix Tool</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<!-- Libraries bundled locally via npm (see BUILD.md) -->
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+<style>
+:root {
+  --bg0:#080b10;--bg1:#0d1117;--bg2:#111820;--bg3:#161e28;
+  --b0:rgba(255,255,255,.06);--b1:rgba(255,255,255,.10);--b2:rgba(255,255,255,.16);
+  --t0:#e2e8f0;--t1:#94a3b8;--t2:#475569;--t3:#2d3a4a;
+  --green:#00d97e;--green-dim:rgba(0,217,126,.12);
+  --amber:#f59e0b;--amber-dim:rgba(245,158,11,.12);
+  --red:#f87171;--red-dim:rgba(248,113,113,.12);
+  --blue:#38bdf8;--blue-dim:rgba(56,189,248,.10);
+  --purple:#a78bfa;
+  --mono:'IBM Plex Mono','Courier New',monospace;
+  --sans:'IBM Plex Sans',system-ui,sans-serif;
+  --r:6px;--r2:10px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--bg0);color:var(--t0);font-family:var(--sans);min-height:100vh}
+button{cursor:pointer;font-family:var(--sans)}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:var(--bg1)}
+::-webkit-scrollbar-thumb{background:var(--b2);border-radius:3px}
+
+/* ── LAYOUT ── */
+.app{display:grid;grid-template-rows:52px 1fr;min-height:100vh}
+.titlebar{
+  background:var(--bg1);border-bottom:1px solid var(--b0);
+  display:flex;align-items:center;gap:12px;padding:0 20px;
+  user-select:none;
+}
+.titlebar *{}
+.logo{width:28px;height:28px;border-radius:var(--r);
+  background:linear-gradient(135deg,#f59e0b,#00d97e);
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-weight:700;font-size:12px;color:#000}
+.app-name{font-family:var(--mono);font-size:14px;font-weight:500}
+.app-ver{font-size:10px;color:var(--t2);font-family:var(--mono)}
+.hdr-right{margin-left:auto;display:flex;gap:6px;align-items:center}
+.hdr-status{font-size:11px;color:var(--t2);font-family:var(--mono)}
+
+.body{display:grid;grid-template-columns:240px 1fr;min-height:calc(100vh - 52px)}
+.sidebar{background:var(--bg1);border-right:1px solid var(--b0);
+  padding:16px 14px;overflow-y:auto;display:flex;flex-direction:column;gap:16px}
+.main{padding:20px 24px}
+
+/* ── BUTTONS ── */
+.btn{padding:5px 12px;border-radius:var(--r);border:1px solid var(--b1);
+  background:transparent;color:var(--t1);font-size:11px;font-family:var(--mono);transition:all .15s}
+.btn:hover{background:var(--b0);color:var(--t0);border-color:var(--b2)}
+.btn-amber{background:var(--amber-dim);border-color:rgba(245,158,11,.4);color:var(--amber)}
+.btn-amber:hover{background:rgba(245,158,11,.2)}
+.btn-pdf{background:var(--blue-dim);border-color:rgba(56,189,248,.3);color:var(--blue)}
+.btn-pdf:hover{background:rgba(56,189,248,.2)}
+.btn-green{background:var(--green-dim);border-color:rgba(0,217,126,.3);color:var(--green)}
+
+/* ── SIDEBAR COMPONENTS ── */
+.sb-title{font-size:9px;font-family:var(--mono);font-weight:600;
+  letter-spacing:.12em;color:var(--t2);text-transform:uppercase;
+  display:flex;align-items:center;gap:6px;margin-bottom:8px}
+.sb-title::after{content:'';flex:1;height:1px;background:var(--b0)}
+
+.slot{border:1.5px dashed var(--b1);border-radius:var(--r2);padding:12px;
+  cursor:pointer;transition:all .2s;margin-bottom:6px;min-height:70px;
+  display:flex;align-items:center;justify-content:center;flex-direction:column;gap:4px}
+.slot:hover{border-color:var(--amber);background:var(--amber-dim)}
+.slot.loaded{border-style:solid;border-color:var(--b1);cursor:default}
+.slot.loaded:hover{border-color:var(--amber)}
+.slot-num{font-size:18px;color:var(--t3)}
+.slot-hint{font-size:10px;color:var(--t2);font-family:var(--mono);text-align:center}
+.slot-name{font-size:11px;font-family:var(--mono);color:var(--t0);font-weight:500;word-break:break-all}
+.slot-meta{font-size:10px;color:var(--t2);font-family:var(--mono)}
+.slot-best{font-size:10px;color:var(--green);font-family:var(--mono)}
+.slot-remove{font-size:11px;color:var(--t2);background:none;border:none;float:right;padding:0 2px}
+.slot-remove:hover{color:var(--red)}
+
+/* ── WEIGHT SLIDERS ── */
+.wrow{margin-bottom:8px}
+.wlabel{display:flex;justify-content:space-between;font-size:10px;font-family:var(--mono);color:var(--t1);margin-bottom:3px}
+.wval{color:var(--amber);font-weight:500}
+input[type=range]{width:100%;height:3px;accent-color:var(--amber)}
+
+/* ── MAIN CONTENT SECTIONS ── */
+.section{margin-bottom:24px}
+.sec-head{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.sec-head h2{font-size:11px;font-family:var(--mono);font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--t1)}
+.sec-line{flex:1;height:1px;background:var(--b0)}
+
+/* ── EMPTY STATE ── */
+#empty{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  min-height:70vh;gap:12px;text-align:center}
+.empty-cards{display:flex;gap:14px;margin-top:20px;flex-wrap:wrap;justify-content:center}
+.ec{background:var(--bg2);border:1px solid var(--b0);border-radius:var(--r2);
+  padding:14px 18px;max-width:170px;font-size:11px;color:var(--t1)}
+.ec-icon{font-size:20px;margin-bottom:6px}
+.ec-title{color:var(--t0);font-weight:500;font-family:var(--mono);margin-bottom:4px;font-size:12px}
+
+/* ── STRATEGY TABS ── */
+.strat-tabs{display:flex;gap:0;border-bottom:1px solid var(--b0);margin-bottom:20px}
+.stab{padding:8px 16px;font-size:11px;font-family:var(--mono);border:none;
+  background:transparent;color:var(--t2);cursor:pointer;
+  border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .15s}
+.stab:hover{color:var(--t1)}
+.stab.active{color:var(--amber);border-bottom-color:var(--amber)}
+.stab .dot{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:5px;vertical-align:middle}
+
+/* ── METRICS ── */
+.metrics-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:7px}
+.mc{background:var(--bg2);border:1px solid var(--b0);border-radius:var(--r);padding:11px 13px}
+.mc .ml{font-size:9px;font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--t2);margin-bottom:4px}
+.mc .mv{font-size:19px;font-family:var(--mono);font-weight:500}
+.mc .ms{font-size:10px;color:var(--t2);font-family:var(--mono);margin-top:2px}
+.mc.is-top{border-top:2px solid var(--blue)}
+.mc.oos-top{border-top:2px solid var(--green)}
+.mc.full-top{border-top:2px solid var(--purple)}
+.mc.risk-top{border-top:2px solid var(--amber)}
+.cg{color:var(--green)}.ca{color:var(--amber)}.cr{color:var(--red)}.cb{color:var(--blue)}.cp{color:var(--purple)}
+
+/* ── REC CARD ── */
+.rec-card{background:linear-gradient(135deg,rgba(0,217,126,.08),rgba(0,217,126,.02));
+  border:1px solid rgba(0,217,126,.2);border-radius:var(--r2);padding:16px 20px;margin-bottom:16px}
+.rec-badge{font-size:9px;font-family:var(--mono);letter-spacing:.12em;text-transform:uppercase;
+  color:var(--green);background:rgba(0,217,126,.12);border:1px solid rgba(0,217,126,.2);
+  padding:2px 8px;border-radius:20px;display:inline-block;margin-bottom:6px}
+.rec-name{font-size:20px;font-family:var(--mono);font-weight:700;color:var(--green);margin-bottom:4px}
+.rec-sub{font-size:11px;color:var(--t1);font-family:var(--mono)}
+.rec-zone{font-size:10px;font-family:var(--mono);margin-top:5px}
+.zone-ok{color:var(--green)}.zone-warn{color:var(--amber)}
+
+/* ── RETDD TRIAD ── */
+.rdd-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:16px}
+.rdd-card{background:var(--bg2);border:1px solid var(--b0);border-radius:var(--r2);padding:14px 16px}
+.rdd-card.primary{border-color:rgba(0,217,126,.25);background:rgba(0,217,126,.05)}
+.rdd-lbl{font-size:9px;font-family:var(--mono);color:var(--t2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px}
+.rdd-val{font-size:26px;font-family:var(--mono);font-weight:700}
+.rdd-sub{font-size:10px;color:var(--t2);font-family:var(--mono);margin-top:2px}
+
+/* ── FLAGS ── */
+.flags-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:6px}
+.flag{display:flex;gap:8px;align-items:flex-start;padding:9px 12px;border-radius:var(--r);border-left:3px solid}
+.flag-ok{background:var(--green-dim);border-color:var(--green)}
+.flag-warn{background:var(--amber-dim);border-color:var(--amber)}
+.flag-bad{background:var(--red-dim);border-color:var(--red)}
+.flag-icon{font-size:13px;flex-shrink:0;margin-top:1px}
+.flag-title{font-size:11px;font-family:var(--mono);font-weight:500;margin-bottom:2px}
+.flag-desc{font-size:10px;color:var(--t1)}
+
+/* ── VERDICT ── */
+.verdict{border-radius:var(--r2);padding:12px 16px;margin-bottom:14px;
+  display:flex;align-items:center;gap:12px;border:1px solid}
+.v-ok{background:var(--green-dim);border-color:rgba(0,217,126,.2)}
+.v-warn{background:var(--amber-dim);border-color:rgba(245,158,11,.2)}
+.v-bad{background:var(--red-dim);border-color:rgba(248,113,113,.2)}
+.v-icon{font-size:24px}
+.v-title{font-size:14px;font-weight:600;font-family:var(--mono);margin-bottom:2px}
+.v-sub{font-size:11px;color:var(--t1)}
+
+/* ── ACCOUNT CARDS ── */
+.acct-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.acct-card{border-radius:var(--r2);padding:14px 16px;border:1.5px solid}
+.acct-g{background:rgba(0,217,126,.08);border-color:rgba(0,217,126,.25)}
+.acct-a{background:rgba(245,158,11,.08);border-color:rgba(245,158,11,.25)}
+.acct-r{background:rgba(248,113,113,.08);border-color:rgba(248,113,113,.25)}
+.acct-header{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.acct-icon{font-size:18px}
+.acct-title{font-size:12px;font-family:var(--mono);font-weight:600}
+.acct-detail{font-size:9px;color:var(--t2);font-family:var(--mono)}
+.acct-score{margin-left:auto;font-size:16px;font-family:var(--mono);font-weight:700}
+.acct-msg{font-size:11px;color:var(--t1);line-height:1.5}
+.acct-fails{margin-top:6px;padding:6px 8px;background:rgba(0,0,0,.25);
+  border-radius:4px;font-size:10px;font-family:var(--mono);color:var(--t2)}
+.tl-bar{display:flex;gap:14px;align-items:center;padding:10px 14px;
+  background:var(--bg3);border:1px solid var(--b0);border-radius:var(--r2);
+  margin-bottom:12px;flex-wrap:wrap}
+.tl-item{display:flex;align-items:center;gap:5px;font-size:11px;font-family:var(--mono)}
+.tl-dot{width:8px;height:8px;border-radius:50%}
+.discard-box{background:rgba(127,29,29,.3);border:2px solid var(--red);
+  border-radius:var(--r2);padding:12px 16px;margin-bottom:12px}
+
+/* ── CONSEC CARDS ── */
+.consec-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+
+/* ── TABLE ── */
+.tbl-wrap{overflow-x:auto;border:1px solid var(--b0);border-radius:var(--r)}
+table{width:100%;border-collapse:collapse;font-size:11px;font-family:var(--mono)}
+thead th{background:var(--bg3);padding:8px 10px;text-align:right;
+  color:var(--t2);font-weight:500;border-bottom:1px solid var(--b0);
+  white-space:nowrap;cursor:pointer;user-select:none}
+thead th:first-child{text-align:left}
+thead th:hover{color:var(--t1)}
+tbody td{padding:6px 10px;text-align:right;border-bottom:1px solid var(--b0);color:var(--t1)}
+tbody td:first-child{text-align:left;color:var(--t0)}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:rgba(255,255,255,.015)}
+tbody tr.winner td{background:rgba(0,217,126,.04)}
+tbody tr.winner td:first-child{color:var(--green)}
+.sbar{display:inline-block;height:3px;background:var(--amber);border-radius:2px;vertical-align:middle;margin-left:4px}
+
+/* ── HEATMAP ── */
+.hm-wrap{overflow-x:auto}
+.hm-grid{display:inline-grid;gap:3px}
+.hm-cell{width:62px;height:38px;border-radius:4px;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;font-family:var(--mono);
+  font-size:11px;font-weight:500;cursor:pointer;transition:transform .12s;position:relative}
+.hm-cell:hover{transform:scale(1.07)}
+.hm-cell .star{font-size:9px;opacity:.9}
+.hm-lbl{font-size:9px;color:var(--t2);text-align:center;padding:2px;font-family:var(--mono)}
+.hm-rlbl{font-size:9px;color:var(--t1);text-align:right;padding:2px 6px;font-family:var(--mono);display:flex;align-items:center;justify-content:flex-end}
+
+/* ── PERIOD ROWS ── */
+.period-row{display:grid;gap:8px;align-items:center;padding:8px 12px;
+  background:var(--bg2);border:1px solid var(--b0);border-radius:var(--r);
+  margin-bottom:3px;font-family:var(--mono);font-size:11px;
+  grid-template-columns:110px 95px 75px 65px 55px 1fr}
+.pbar-wrap{background:var(--bg3);border-radius:2px;height:4px;overflow:hidden}
+.pbar{height:100%;border-radius:2px}
+
+/* ── REASON ITEMS ── */
+.reason-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.reason-item{background:var(--bg2);border:1px solid var(--b0);
+  border-radius:var(--r);padding:11px 13px;border-left:3px solid}
+.ri-ok{border-left-color:var(--green)}.ri-warn{border-left-color:var(--amber)}.ri-bad{border-left-color:var(--red)}
+.ri-title{font-size:11px;font-family:var(--mono);font-weight:500;margin-bottom:3px}
+.ri-desc{font-size:10px;color:var(--t1);line-height:1.5}
+
+/* ── COMPARISON ── */
+.cmp-row{display:grid;gap:8px;align-items:center;padding:6px 0;
+  border-bottom:1px solid var(--b0);font-family:var(--mono);font-size:11px}
+.cmp-lbl{color:var(--t2);font-size:10px}
+.cmp-win{font-weight:600}
+.cmp-lose{color:var(--t2)}
+
+/* ── CHART CONTAINERS ── */
+.chart-box{background:var(--bg2);border:1px solid var(--b0);border-radius:var(--r2);padding:14px 16px;margin-bottom:12px}
+.chart-title{font-size:10px;font-family:var(--mono);color:var(--t2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px}
+.charts-2col{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+/* ── INFO PILL ── */
+.info-pill{background:var(--bg3);border:1px solid var(--b0);border-radius:var(--r);
+  padding:8px 12px;font-size:10px;font-family:var(--mono);color:var(--t2);line-height:1.6}
+
+/* ── DISCLAIMER ── */
+.disclaimer{background:var(--bg2);border:1px solid var(--b0);border-radius:var(--r);
+  padding:10px 14px;font-size:10px;font-family:var(--mono);color:var(--t2);
+  line-height:1.6;margin-top:24px}
+
+/* ── TAB PILLS ── */
+.tab-pills{display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap}
+.tab-pill{padding:3px 10px;border-radius:20px;border:1px solid var(--b0);
+  background:transparent;color:var(--t2);font-size:10px;font-family:var(--mono);transition:all .15s}
+.tab-pill:hover{border-color:var(--b1);color:var(--t1)}
+.tab-pill.active{background:var(--amber-dim);border-color:rgba(245,158,11,.4);color:var(--amber)}
+
+/* ── DROP OVERLAY ── */
+.drop-overlay{position:fixed;inset:0;background:rgba(245,158,11,.15);
+  border:3px dashed var(--amber);z-index:999;display:none;
+  align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:20px;color:var(--amber)}
+.drop-overlay.active{display:flex}
+/* ── PRINT ── */
+@media print {
+  .titlebar,.sidebar,.strat-tabs,.tab-pills,.btn,.no-print{display:none!important}
+  .body{grid-template-columns:1fr!important}
+  .main{overflow:visible!important;padding:0!important}
+  *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
+}
+</style>
+</head>
+<body>
+<div id="drop-overlay" class="drop-overlay">📦 Suelta el .sqx aquí</div>
+<div class="app">
+
+<!-- TITLEBAR -->
+<div class="titlebar">
+  <div class="logo">SQ</div>
+  <span class="app-name">SQX Analyzer</span>
+  <span class="app-ver">v3.0</span>
+  <div class="hdr-right">
+    <span class="hdr-status" id="hdr-status">Sin datos cargados</span>
+    <button class="btn btn-amber no-print" id="btn-load" onclick="loadFiles()">+ Cargar .sqx</button>
+    <button class="btn btn-pdf no-print" id="btn-pdf" style="display:none" onclick="exportPDF()">⬇ PDF</button>
+  </div>
+</div>
+
+<!-- BODY -->
+<div class="body">
+
+<!-- SIDEBAR -->
+<aside class="sidebar no-print">
+
+  <div>
+    <div class="sb-title">Estrategias cargadas</div>
+    <div id="slots"></div>
+  </div>
+
+  <div>
+    <div class="sb-title">Pesos del scoring</div>
+    <div id="weights-panel"></div>
+    <button class="btn" style="width:100%;margin-top:6px;font-size:10px" onclick="resetWeights()">↺ Resetear</button>
+  </div>
+
+  <div style="margin-top:auto">
+    <div class="sb-title">Referencia</div>
+    <div style="font-size:10px;font-family:var(--mono);color:var(--t2);line-height:1.9">
+      <div><span style="color:var(--green)">●</span> RetDD &gt; 4.5 / CV &lt; 0.6</div>
+      <div><span style="color:var(--amber)">●</span> Valores intermedios</div>
+      <div><span style="color:var(--red)">●</span> Requiere revisión</div>
+      <div style="margin-top:6px"><span style="color:var(--blue)">IS</span> = In-Sample</div>
+      <div><span style="color:var(--green)">OOS</span> = Out-of-Sample</div>
+      <div><span style="color:var(--purple)">FULL</span> = IS+OOS (Overview SQ)</div>
+    </div>
+  </div>
+
+</aside>
+
+<!-- MAIN -->
+<main class="main" id="main-area">
+  <div id="empty">
+    <div style="font-size:36px">📊</div>
+    <div style="font-size:20px;font-family:var(--mono);font-weight:500">SQX Analyzer</div>
+    <div style="color:var(--t1);font-size:13px;max-width:380px;line-height:1.6">
+      Carga tus archivos <span style="color:var(--amber);font-family:var(--mono)">.sqx</span> de WF Matrix usando el botón superior derecho o el panel izquierdo.
+    </div>
+    <div class="empty-cards">
+      <div class="ec"><div class="ec-icon">🏆</div><div class="ec-title">Run óptimo</div>Regla 2×2 + scoring IS/OOS/Full</div>
+      <div class="ec"><div class="ec-icon">⚡</div><div class="ec-title">Risk flags</div>8 controles de calidad automáticos</div>
+      <div class="ec"><div class="ec-icon">⚖️</div><div class="ec-title">Comparación</div>Hasta 3 estrategias lado a lado</div>
+      <div class="ec"><div class="ec-icon">💼</div><div class="ec-title">Cuentas</div>Prop firm · Darwin · Capital propio</div>
+    </div>
+  </div>
+  <div id="dashboard" style="display:none">
+    <div class="strat-tabs" id="strat-tabs"></div>
+    <div id="strat-view"></div>
+    <div id="compare-section" style="display:none"></div>
+  </div>
+</main>
+
+</div><!-- /body -->
+</div><!-- /app -->
+
+<script src="analyzer.js"></script>
+<script src="web-adapter.js"></script>
+</body>
+</html>
