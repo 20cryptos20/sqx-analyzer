@@ -173,12 +173,16 @@ function getZoneInfo(runs) {
   const oosList  = [...new Set(runs.map(r=>r.oosPct))].sort((a,b)=>a-b);
   const runsList = [...new Set(runs.map(r=>r.nRuns))].sort((a,b)=>a-b);
   const getR = (nr,op) => runs.find(r=>r.nRuns===nr&&r.oosPct===op);
+
+  // Threshold from non-border runs
   const nonBorder = runs.filter(r=>
     r.nRuns!==runsList[0]&&r.nRuns!==runsList[runsList.length-1]&&
     r.oosPct!==oosList[0]&&r.oosPct!==oosList[oosList.length-1]);
   const rdds = nonBorder.map(r=>r.oos_rdd).sort((a,b)=>a-b);
   const threshold = rdds.length ? rdds[Math.floor(rdds.length*0.35)] : 0;
-  const zoneValid=new Set(), zoneScores={};
+
+  // Step 1: find all valid 2x2 zones
+  const allZoneCells=new Set(), zoneScores={};
   for(let ri=0;ri<runsList.length-1;ri++) {
     for(let oi=0;oi<oosList.length-1;oi++) {
       const cells=[getR(runsList[ri],oosList[oi]),getR(runsList[ri],oosList[oi+1]),
@@ -186,10 +190,43 @@ function getZoneInfo(runs) {
       if(cells.some(c=>!c)) continue;
       if(!cells.every(c=>c.oos_rdd>=threshold)) continue;
       const avg=cells.reduce((s,c)=>s+c.oos_rdd,0)/4;
-      cells.forEach(c=>{zoneValid.add(c.name);if(!zoneScores[c.name]||avg>zoneScores[c.name])zoneScores[c.name]=avg;});
+      cells.forEach(c=>{allZoneCells.add(c.name);if(!zoneScores[c.name]||avg>zoneScores[c.name])zoneScores[c.name]=avg;});
     }
   }
-  return {zoneValid,zoneScores,threshold,oosList,runsList};
+
+  // Step 2: a run is "selectable" only if it has valid neighbors
+  // in ALL 4 directions (up, down, left, right) that are also in a valid zone.
+  // This ensures the run is truly central, not on the edge of a 2x2 block.
+  const zoneValid = new Set();
+  for(const r of runs) {
+    const ri = runsList.indexOf(r.nRuns);
+    const oi = oosList.indexOf(r.oosPct);
+    // Must not be on any border of the matrix
+    if(ri===0||ri===runsList.length-1||oi===0||oi===oosList.length-1) continue;
+    // Must itself be in a valid zone
+    if(!allZoneCells.has(r.name)) continue;
+    // All 4 direct neighbors must also be in a valid zone
+    const neighbors = [
+      getR(runsList[ri-1], oosList[oi]),  // up
+      getR(runsList[ri+1], oosList[oi]),  // down
+      getR(runsList[ri],   oosList[oi-1]),// left
+      getR(runsList[ri],   oosList[oi+1]),// right
+    ];
+    if(neighbors.some(n=>!n||!allZoneCells.has(n.name))) continue;
+    zoneValid.add(r.name);
+  }
+
+  // Fallback: if no run passes the strict central test, use the allZoneCells
+  // but exclude border runs
+  const finalValid = zoneValid.size > 0 ? zoneValid : 
+    new Set([...allZoneCells].filter(name => {
+      const r = runs.find(x=>x.name===name);
+      if(!r) return false;
+      const ri=runsList.indexOf(r.nRuns), oi=oosList.indexOf(r.oosPct);
+      return ri>0&&ri<runsList.length-1&&oi>0&&oi<oosList.length-1;
+    }));
+
+  return {zoneValid:finalValid, allZoneCells, zoneScores, threshold, oosList, runsList};
 }
 
 function getBest(runs) {
@@ -695,10 +732,11 @@ function renderHM(idx, runs, scores, zone, best) {
       if(!r){html+=`<div class="hm-cell"></div>`;return;}
       const v=getVal(r), bg=cellBg(v);
       const isWin=r.name===best.name;
-      const inZone=zone.zoneValid.has(r.name);
+      const inZone=zone.allZoneCells&&zone.allZoneCells.has(r.name)||zone.zoneValid.has(r.name);
+      const isCentral=zone.zoneValid.has(r.name)&&!isWin;
       const fmt=hmMetric==='score'?scMap[r.name]:
                 hmMetric==='cv'||hmMetric==='degradation'?v.toFixed(2):v.toFixed(2);
-      const outline=isWin?'outline:2.5px solid var(--green)':inZone?'outline:1px dashed rgba(0,217,126,.4)':'';
+      const outline=isWin?'outline:2.5px solid var(--green)':isCentral?'outline:1.5px solid rgba(0,217,126,.5)':inZone?'outline:1px dashed rgba(0,217,126,.25)':'';
       html+=`<div class="hm-cell" style="background:${bg};${outline}" title="${r.name}: ${fmt}">
         ${fmt}${isWin?'<div class="star">★</div>':''}
       </div>`;
