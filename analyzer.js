@@ -1,4 +1,4 @@
-// SQX Analyzer v3 — Main Logic
+// SQX Analyzer v4 — Main Logic
 // All processing happens locally, files never leave the user's machine
 
 // ═══════════════════════════════════════════
