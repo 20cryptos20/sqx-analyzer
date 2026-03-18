@@ -1,4 +1,4 @@
-// SQX Analyzer v4 — Main Logic
+// SQX Analyzer v3 — Main Logic
 // All processing happens locally, files never leave the user's machine
 
 // ═══════════════════════════════════════════
@@ -8,6 +8,63 @@ const strategies = [null, null, null];
 let activeStrat  = 0;
 let chartReg     = {};
 const SLOT_COLORS = ['#f59e0b','#38bdf8','#a78bfa'];
+
+// ── Market type thresholds (aligned with your SQ pipeline)
+const MARKET_TYPES = {
+  indices: {
+    label: 'Índices (DAX, NQ, SP500)',
+    rdd_oos_green: 8.0,  rdd_oos_amber: 5.0,   // your pipeline: RDD >= 11 strict, >= 5 divisas
+    rdd_full_green: 10.0, rdd_full_amber: 6.0,
+    cv_green: 0.5,        cv_amber: 0.75,
+    dd_green: 8.0,        dd_amber: 15.0,
+    pf_green: 2.5,        pf_amber: 2.0,
+    wr_green: 60,         wr_amber: 50,
+    rdd_min_green: 2.0,   rdd_min_amber: 1.0,
+    degr_green: 15,       degr_amber: 25,
+    prop_rdd: 3.0, prop_dd: 8, darwin_rdd: 4.0, darwin_cv: 0.7,
+  },
+  forex: {
+    label: 'Divisas (EURUSD, GBPJPY...)',
+    rdd_oos_green: 4.5,  rdd_oos_amber: 3.0,
+    rdd_full_green: 6.0, rdd_full_amber: 4.0,
+    cv_green: 0.6,       cv_amber: 0.85,
+    dd_green: 10.0,      dd_amber: 18.0,
+    pf_green: 2.0,       pf_amber: 1.5,
+    wr_green: 55,        wr_amber: 45,
+    rdd_min_green: 1.5,  rdd_min_amber: 0.8,
+    degr_green: 20,      degr_amber: 35,
+    prop_rdd: 2.5, prop_dd: 10, darwin_rdd: 3.0, darwin_cv: 0.8,
+  },
+  crypto: {
+    label: 'Crypto (BTC, ETH...)',
+    rdd_oos_green: 5.0,  rdd_oos_amber: 3.0,
+    rdd_full_green: 7.0, rdd_full_amber: 4.0,
+    cv_green: 0.7,       cv_amber: 1.0,
+    dd_green: 12.0,      dd_amber: 20.0,
+    pf_green: 2.5,       pf_amber: 2.0,
+    wr_green: 55,        wr_amber: 45,
+    rdd_min_green: 1.5,  rdd_min_amber: 0.8,
+    degr_green: 20,      degr_amber: 35,
+    prop_rdd: 2.5, prop_dd: 10, darwin_rdd: 3.5, darwin_cv: 0.75,
+  },
+  commodities: {
+    label: 'Commodities (XAUUSD, Oil...)',
+    rdd_oos_green: 5.0,  rdd_oos_amber: 3.0,
+    rdd_full_green: 7.0, rdd_full_amber: 4.0,
+    cv_green: 0.6,       cv_amber: 0.85,
+    dd_green: 10.0,      dd_amber: 18.0,
+    pf_green: 2.2,       pf_amber: 1.8,
+    wr_green: 55,        wr_amber: 48,
+    rdd_min_green: 1.5,  rdd_min_amber: 0.8,
+    degr_green: 20,      degr_amber: 30,
+    prop_rdd: 2.5, prop_dd: 10, darwin_rdd: 3.0, darwin_cv: 0.8,
+  },
+};
+let currentMarketType = 'forex';
+function MT() { return MARKET_TYPES[currentMarketType]; }
+
+// ── Zone size config (2x2 default, 3x3 strict like your SQ pipeline)
+let zoneSize = 2; // 2 = 2x2, 3 = 3x3
 
 const DEFAULT_WEIGHTS = {
   oos_rdd:30, cv:20, rdd_min:15, is_rdd:15,
@@ -221,15 +278,19 @@ function getZoneInfo(runs) {
   const rdds = nonBorder.map(r=>r.oos_rdd).sort((a,b)=>a-b);
   const threshold = rdds.length ? rdds[Math.floor(rdds.length*0.35)] : 0;
 
-  // Step 1: find all valid 2x2 zones
+  // Step 1: find all valid NxN zones (zoneSize x zoneSize, default 2x2, can be 3x3)
+  const sz = zoneSize;
   const allZoneCells=new Set(), zoneScores={};
-  for(let ri=0;ri<runsList.length-1;ri++) {
-    for(let oi=0;oi<oosList.length-1;oi++) {
-      const cells=[getR(runsList[ri],oosList[oi]),getR(runsList[ri],oosList[oi+1]),
-                   getR(runsList[ri+1],oosList[oi]),getR(runsList[ri+1],oosList[oi+1])];
-      if(cells.some(c=>!c)) continue;
+  for(let ri=0;ri<=runsList.length-sz;ri++) {
+    for(let oi=0;oi<=oosList.length-sz;oi++) {
+      const cells=[];
+      for(let dr=0;dr<sz;dr++) for(let dc=0;dc<sz;dc++) {
+        const c=getR(runsList[ri+dr],oosList[oi+dc]);
+        if(c) cells.push(c);
+      }
+      if(cells.length<sz*sz) continue;
       if(!cells.every(c=>c.oos_rdd>=threshold)) continue;
-      const avg=cells.reduce((s,c)=>s+c.oos_rdd,0)/4;
+      const avg=cells.reduce((s,c)=>s+c.oos_rdd,0)/cells.length;
       cells.forEach(c=>{allZoneCells.add(c.name);if(!zoneScores[c.name]||avg>zoneScores[c.name])zoneScores[c.name]=avg;});
     }
   }
@@ -341,18 +402,22 @@ function computeFlags(run) {
 // ═══════════════════════════════════════════
 function computeAccount(run) {
   const {oos_dd:dd,oos_pf:pf,oos_rdd:rdd,cv,rdd_min,pct_pos,degradation:degr}=run;
-  const hard=dd>20||rdd<1.5||pf<1.5||pct_pos<50;
-  const soft=!hard&&(dd>15||rdd<2||cv>1.2);
+  const m=MT();
+  const hard=dd>25||rdd<1.5||pf<1.5||pct_pos<50;
+  const soft=!hard&&(dd>m.dd_amber||rdd<2||cv>1.2);
 
-  const pScore=([2*(rdd>=3)+1*(rdd>=2&&rdd<3),2*(dd<=15)+1*(dd<=25&&dd>15),2*(pf>=2.5)+1*(pf>=2&&pf<2.5),1*(cv<=0.9),1*(rdd_min>=1)]).reduce((a,b)=>a+b,0);
+  const pScore=([2*(rdd>=m.rdd_oos_green)+1*(rdd>=m.rdd_oos_amber&&rdd<m.rdd_oos_green),
+    2*(dd<=m.dd_green)+1*(dd<=m.dd_amber&&dd>m.dd_green),
+    2*(pf>=m.pf_green)+1*(pf>=m.pf_amber&&pf<m.pf_green),
+    1*(cv<=m.cv_green),1*(rdd_min>=m.rdd_min_green)]).reduce((a,b)=>a+b,0);
   const pOk=pScore>=6?'g':pScore>=4?'a':'r';
 
   const prFails=[];
-  if(dd>8)   prFails.push(`DD ${dd.toFixed(1)}% > 8%`);
-  if(pf<2)   prFails.push(`PF ${pf.toFixed(2)} insuficiente`);
-  if(rdd<2.5)prFails.push(`RetDD ${rdd.toFixed(2)} bajo para challenge`);
-  if(degr>35)prFails.push(`Degradación ${degr.toFixed(1)}% alta`);
-  const prScore=2*(dd<=8)+2*(pf>=2)+2*(rdd>=2.5)+1*(degr<35)+1*(cv<=1)+1*(rdd_min>=0.8);
+  if(dd>m.prop_dd)     prFails.push(`DD ${dd.toFixed(1)}% > 8%`);
+  if(pf<m.pf_amber)    prFails.push(`PF ${pf.toFixed(2)} insuficiente`);
+  if(rdd<m.prop_rdd)   prFails.push(`RetDD ${rdd.toFixed(2)} bajo para challenge`);
+  if(degr>m.degr_amber)prFails.push(`Degradación ${degr.toFixed(1)}% alta`);
+  const prScore=2*(dd<=m.prop_dd)+2*(pf>=m.pf_amber)+2*(rdd>=m.prop_rdd)+1*(degr<=m.degr_amber)+1*(cv<=m.cv_amber)+1*(rdd_min>=m.rdd_min_amber);
   const prOk=prScore>=7?'g':prScore>=5?'a':'r';
 
   const darFails=[];
@@ -360,7 +425,7 @@ function computeAccount(run) {
   if(cv>0.8) darFails.push(`CV ${cv.toFixed(3)} inconsistente`);
   if(rdd<3)  darFails.push(`RetDD ${rdd.toFixed(2)} bajo para Darwin`);
   if(degr>25)darFails.push(`Degradación ${degr.toFixed(1)}%`);
-  const darScore=2*(dd<=12)+2*(cv<=0.8)+2*(rdd>=3)+1*(pf>=2.5)+1*(pct_pos>=83)+1*(degr<25)+1*(rdd_min>=1);
+  const darScore=2*(dd<=12)+2*(cv<=m.darwin_cv)+2*(rdd>=m.darwin_rdd)+1*(pf>=m.pf_green)+1*(pct_pos>=83)+1*(degr<=m.degr_green)+1*(rdd_min>=m.rdd_min_green);
   const darOk=darScore>=8?'g':darScore>=5?'a':'r';
 
   const discardReasons=[];
@@ -371,22 +436,54 @@ function computeAccount(run) {
     if(pct_pos<50) discardReasons.push(`${pct_pos.toFixed(0)}% periodos positivos`);
   }
 
+  // ── AXI Select: DD máx 7%, objetivo 7%, 5% DD diario ──────
+  const axiDD    = dd <= 5;      // safe margin below 7% hard limit
+  const axiRDD   = rdd >= 3.0;
+  const axiDegr  = degr < 30;
+  const axiCV    = cv <= 0.9;
+  const axiFails = [];
+  if(dd>5)       axiFails.push(`DD ${dd.toFixed(1)}% — margen bajo (límite duro 7%)`);
+  if(rdd<3.0)    axiFails.push(`RetDD ${rdd.toFixed(2)} — objetivo 7% necesita consistencia`);
+  if(degr>30)    axiFails.push(`Degradación ${degr.toFixed(1)}% — riesgo en live`);
+  if(!axiCV)     axiFails.push(`CV ${cv.toFixed(3)} — variabilidad alta para DD tan ajustado`);
+  const axiScore = 2*(dd<=5)+2*(rdd>=3)+2*(pf>=m.pf_amber)+1*(degr<30)+1*(cv<=0.9)+1*(rddMin>=0.8);
+  const axiOk    = axiScore>=7?'g':axiScore>=5?'a':'r';
+  const axiMsg   = axiOk==='g'?'Apta para AXI Select. DD controlado y RetDD suficiente para el objetivo del 7%.':
+                   axiOk==='a'?`Posible con sizing muy conservador (0.5%). Revisar: ${axiFails.join(' · ')}`:
+                   `NO recomendada para AXI Select: ${axiFails.join(' · ')}`;
+
+  // ── Darwinex Zero: DD máx 10%, sin objetivo de profit ───
+  const dzDD   = dd <= 7;       // margin below 10%
+  const dzRDD  = rdd >= 2.5;
+  const dzCV   = cv <= m.darwin_cv;
+  const dzFails = [];
+  if(dd>7)        dzFails.push(`DD ${dd.toFixed(1)}% — margen bajo (límite 10%)`);
+  if(rdd<2.5)     dzFails.push(`RetDD ${rdd.toFixed(2)} — consistencia insuficiente`);
+  if(cv>m.darwin_cv) dzFails.push(`CV ${cv.toFixed(3)} — variabilidad penaliza D-Score`);
+  const dzScore = 2*(dd<=7)+2*(rdd>=2.5)+2*(cv<=m.darwin_cv)+1*(pf>=m.pf_amber)+1*(pct_pos>=80)+1*(degr<=m.degr_amber)+1*(rddMin>=0.8);
+  const dzOk    = dzScore>=8?'g':dzScore>=5?'a':'r';
+  const dzMsg   = dzOk==='g'?'Apta para Darwinex Zero. Sin objetivo de profit — solo necesita consistencia y DD controlado.':
+                  dzOk==='a'?`Viable en Darwinex Zero. Mejorar: ${dzFails.join(' · ')}`:
+                  `No óptima para Darwinex Zero: ${dzFails.join(' · ')}`;
+
   return {
-    propia: {ok:pOk,score:pScore,max:8,
+    propia:  {ok:pOk, score:pScore, max:8,
       msg:pOk==='g'?'Apta — buen ratio riesgo/retorno para capital propio.':
           pOk==='a'?'Viable con gestión de riesgo conservadora.':'Drawdown o consistencia insuficientes.',
       fails:[]},
-    prop:   {ok:prOk,score:prScore,max:9,
-      msg:prOk==='g'?'Apta para challenge de prop firm. Cumple márgenes de seguridad.':
-          prOk==='a'?`Posible con sizing reducido. Puntos: ${prFails.join(' · ')}`:
-                     `NO recomendada para prop firm: ${prFails.join(' · ')}`,
+    prop:    {ok:prOk, score:prScore, max:9,
+      msg:prOk==='g'?`Apta para prop firm (5% DD diario · 10% max · objetivo 10% fase 1 / 5% fase 2).`:
+          prOk==='a'?`Posible con sizing reducido. Revisar: ${prFails.join(' · ')}`:
+          `NO recomendada para prop firm: ${prFails.join(' · ')}`,
       fails:prFails},
-    darwin: {ok:darOk,score:darScore,max:10,
+    darwin:  {ok:darOk, score:darScore, max:10,
       msg:darOk==='g'?'Excelente para Darwinex. CV bajo y DD controlado puntúan en D-Score.':
           darOk==='a'?`Viable en Darwin con historial largo. Mejorar: ${darFails.join(' · ')}`:
-                      `Perfil no óptimo para Darwin: ${darFails.join(' · ')}`,
+          `Perfil no óptimo para Darwin: ${darFails.join(' · ')}`,
       fails:darFails},
-    discard:{level:hard?'hard':soft?'soft':'none', reasons:discardReasons},
+    darwinZero: {ok:dzOk, score:dzScore, max:10, msg:dzMsg, fails:dzFails},
+    axiSelect:  {ok:axiOk, score:axiScore, max:9, msg:axiMsg, fails:axiFails},
+    discard: {level:hard?'hard':soft?'soft':'none', reasons:discard_reasons},
   };
 }
 
@@ -540,6 +637,21 @@ function cVal(v,good,ok,inv=false){
   if(inv)return v<=good?'g':v<=ok?'a':'r';
   return v>=good?'g':v>=ok?'a':'r';
 }
+// Market-aware color for key metrics
+function mColor(metric, v) {
+  const m = MT();
+  switch(metric) {
+    case 'oos_rdd':  return cVal(v, m.rdd_oos_green,  m.rdd_oos_amber);
+    case 'full_rdd': return cVal(v, m.rdd_full_green, m.rdd_full_amber);
+    case 'cv':       return cVal(v, m.cv_green,       m.cv_amber,  true);
+    case 'oos_dd':   return cVal(v, m.dd_green,       m.dd_amber,  true);
+    case 'oos_pf':   return cVal(v, m.pf_green,       m.pf_amber);
+    case 'oos_wr':   return cVal(v*100, m.wr_green,   m.wr_amber);
+    case 'rdd_min':  return cVal(v, m.rdd_min_green,  m.rdd_min_amber);
+    case 'degr':     return cVal(v, m.degr_green,     m.degr_amber, true);
+    default: return 'g';
+  }
+}
 function mc(lbl,val,c,sub='',topCls=''){
   return `<div class="mc ${topCls}"><div class="ml">${lbl}</div><div class="mv ${C[c]||''}">${val}</div>${sub?`<div class="ms">${sub}</div>`:''}</div>`;
 }
@@ -614,7 +726,7 @@ function renderStratView(idx) {
 
     <!-- RECOMMENDATION -->
     <div class="rec-card">
-      <div class="rec-badge">★ RUN RECOMENDADO · SCORE ${bestScore}/100</div>
+      <div class="rec-badge">★ RUN RECOMENDADO · SCORE ${bestScore}/100 · ${MARKET_TYPES[currentMarketType].label.split(" ")[0].toUpperCase()}</div>
       <div class="rec-name">${best.name}</div>
       <div class="rec-sub">RetDD FULL <strong style="color:var(--green)">${best.full_rdd.toFixed(2)}</strong> · OOS ${best.oos_rdd.toFixed(2)} · IS ${best.is_rdd.toFixed(2)} · CV ${best.cv.toFixed(3)} · RDD mín ${best.rdd_min.toFixed(2)} · Degr ${best.degradation.toFixed(1)}%</div>
       ${zoneLine}
@@ -622,8 +734,8 @@ function renderStratView(idx) {
 
     <!-- RETDD TRIAD -->
     <div class="rdd-grid">
-      <div class="rdd-card primary"><div class="rdd-lbl">RetDD Full (IS+OOS)</div><div class="rdd-val ${cVal(best.full_rdd,5,3)?C[cVal(best.full_rdd,5,3)]:'cg'}">${best.full_rdd>0?best.full_rdd.toFixed(2):'—'}</div><div class="rdd-sub">equiv. Overview SQ</div></div>
-      <div class="rdd-card"><div class="rdd-lbl">RetDD OOS</div><div class="rdd-val ${C[cVal(best.oos_rdd,4.5,3)]}">${best.oos_rdd.toFixed(2)}</div><div class="rdd-sub">out-of-sample</div></div>
+      <div class="rdd-card primary"><div class="rdd-lbl">RetDD Full (IS+OOS)</div><div class="rdd-val ${mColor('full_rdd',best.full_rdd)?C[mColor('full_rdd',best.full_rdd)]:'cg'}">${best.full_rdd>0?best.full_rdd.toFixed(2):'—'}</div><div class="rdd-sub">equiv. Overview SQ</div></div>
+      <div class="rdd-card"><div class="rdd-lbl">RetDD OOS</div><div class="rdd-val ${C[mColor('oos_rdd',best.oos_rdd)]}">${best.oos_rdd.toFixed(2)}</div><div class="rdd-sub">out-of-sample</div></div>
       <div class="rdd-card"><div class="rdd-lbl">RetDD IS</div><div class="rdd-val cb">${best.is_rdd.toFixed(2)}</div><div class="rdd-sub">in-sample</div></div>
       <div class="rdd-card"><div class="rdd-lbl">RetDD Zona 2×2</div><div class="rdd-val ca">${zoneRddAvg.toFixed(2)}</div><div class="rdd-sub">media 4 celdas vecinas</div></div>
     </div>
@@ -633,13 +745,13 @@ function renderStratView(idx) {
     <div class="metrics-grid">
       ${mc('NP OOS','$'+best.oos_np.toLocaleString('es',{maximumFractionDigits:0}),cVal(best.oos_np,1000,0),'out-of-sample','oos-top')}
       ${mc('NP Full','$'+best.full_np.toLocaleString('es',{maximumFractionDigits:0}),'p','IS + OOS','full-top')}
-      ${mc('PF OOS',best.oos_pf.toFixed(2),cVal(best.oos_pf,3,2),'out-of-sample','oos-top')}
-      ${mc('WR OOS',(best.oos_wr*100).toFixed(0)+'%',cVal(best.oos_wr*100,65,55),'out-of-sample','oos-top')}
+      ${mc('PF OOS',best.oos_pf.toFixed(2),mColor('oos_pf',best.oos_pf),'out-of-sample','oos-top')}
+      ${mc('WR OOS',(best.oos_wr*100).toFixed(0)+'%',mColor('oos_wr',best.oos_wr),'out-of-sample','oos-top')}
       ${mc('Sharpe OOS',best.oos_sh.toFixed(2),cVal(best.oos_sh,1.5,1),'out-of-sample','oos-top')}
-      ${mc('Max DD OOS',best.oos_dd.toFixed(2)+'%',cVal(best.oos_dd,0,8,true),'out-of-sample','risk-top')}
-      ${mc('CV Planitud',best.cv.toFixed(3),cVal(best.cv,0,0.85,true),'menor = más plano','risk-top')}
-      ${mc('RDD mín',best.rdd_min.toFixed(2),cVal(best.rdd_min,2,1),'peor ventana OOS','risk-top')}
-      ${mc('Degradación',best.degradation.toFixed(1)+'%',cVal(best.degradation,0,25,true),'IS→OOS RetDD','risk-top')}
+      ${mc('Max DD OOS',best.oos_dd.toFixed(2)+'%',mColor('oos_dd',best.oos_dd),'out-of-sample','risk-top')}
+      ${mc('CV Planitud',best.cv.toFixed(3),mColor('cv',best.cv),'menor = más plano','risk-top')}
+      ${mc('RDD mín',best.rdd_min.toFixed(2),mColor('rdd_min',best.rdd_min),'peor ventana OOS','risk-top')}
+      ${mc('Degradación',best.degradation.toFixed(1)+'%',mColor('degr',best.degradation),'IS→OOS RetDD','risk-top')}
       ${mc('% Periodos+',best.pct_pos.toFixed(0)+'%',cVal(best.pct_pos,100,83),'OOS positivos','oos-top')}
       ${mc('RetDD IS',best.is_rdd.toFixed(2),cVal(best.is_rdd,4,2.5),'in-sample','is-top')}
       ${mc('NP IS','$'+best.is_np.toLocaleString('es',{maximumFractionDigits:0}),'b','in-sample','is-top')}
@@ -692,10 +804,12 @@ function renderStratView(idx) {
         `<div class="tl-item"><div class="tl-dot" style="background:${FMT[a.ok]}"></div><span style="color:${FMT[a.ok]}">${lbl}</span></div>`).join('')}
       ${acct.discard.level==='hard'?`<span style="margin-left:auto;font-size:11px;font-family:var(--mono);color:var(--red);font-weight:600">🚫 DESCARTAR</span>`:''}
     </div>
-    <div class="acct-grid">
-      ${acctCard('Capital Propio','💼','Sin restricciones externas',acct.propia)}
-      ${acctCard('Prop Firm','🏢','FTMO, MyFF, etc.',acct.prop)}
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px">
+      ${acctCard('Capital Propio','💼','Sin restricciones externas · sizing libre',acct.propia)}
+      ${acctCard('Prop Firm','🏢','5% DD diario · 10% max DD · Obj 10%→5%',acct.prop)}
       ${acctCard('Darwin / Darwinex','🧬','D-Score: consistencia y DD',acct.darwin)}
+      ${acctCard('Darwinex Zero','🟢','DD máx 10% · Sin objetivo de profit',acct.darwinZero)}
+      ${acctCard('AXI Select','⚡','DD máx 7% · Objetivo 7%',acct.axiSelect)}
     </div></div>
 
     <!-- CONSECUTIVE -->
@@ -713,6 +827,16 @@ function renderStratView(idx) {
     <div class="section"><div class="sec-head"><h2>¿Por qué este run?</h2><div class="sec-line"></div></div>
     <div class="reason-grid" id="reasons-${idx}"></div></div>
 
+    <!-- AI SUMMARY -->
+    <div class="section">
+      <div class="sec-head"><h2>Resumen ejecutivo IA</h2><div class="sec-line"></div></div>
+      <div id="ai-summary-${idx}" style="background:var(--bg2);border:1px solid var(--b0);border-radius:var(--r2);padding:14px 18px;min-height:60px">
+        <div style="font-size:10px;font-family:var(--mono);color:var(--t2)" id="ai-text-${idx}">
+          <span style="color:var(--t3)">⟳ Generando resumen...</span>
+        </div>
+      </div>
+    </div>
+
     <div class="disclaimer">⚠ AVISO: Este análisis se basa exclusivamente en datos históricos (backtest). Los resultados pasados no garantizan rendimientos futuros. Toda estrategia debe validarse con paper trading antes de operar con capital real. Herramienta desarrollada para uso educativo en comunidades de traders algorítmicos.</div>
   `;
 
@@ -721,6 +845,8 @@ function renderStratView(idx) {
   renderRankTable(idx, runs, scores, best);
   renderCharts(idx, runs, scores, best);
   renderReasons(idx, runs, scores, best, zone);
+  // Generate AI summary async (non-blocking)
+  generateAISummary(idx, best, s.meta, acct, cons, hasZone, zoneRddAvg, bestScore);
 }
 
 // ═══════════════════════════════════════════
@@ -938,6 +1064,81 @@ function renderReasons(idx, runs, scores, best, zone) {
 // ═══════════════════════════════════════════
 // COMPARISON
 // ═══════════════════════════════════════════
+// ── AI SUMMARY ─────────────────────────────────────────────
+async function generateAISummary(idx, run, meta, acct, cons, hasZone, zoneRddAvg, score) {
+  const el = document.getElementById(`ai-text-${idx}`);
+  if (!el) return;
+
+  const mt = MARKET_TYPES[currentMarketType];
+  const zoneTxt = hasZone
+    ? `en zona ${zoneSize}×${zoneSize} estable (RetDD zona ${zoneRddAvg.toFixed(2)})`
+    : `sin zona ${zoneSize}×${zoneSize} válida (selección por score puro)`;
+
+  const accountSummary = [
+    acct.propia.ok==='g'  ? '✓ Capital propio'   : acct.propia.ok==='a'  ? '⚠ Capital propio'   : null,
+    acct.prop.ok==='g'    ? '✓ Prop firm'         : acct.prop.ok==='a'    ? '⚠ Prop firm'         : null,
+    acct.darwin.ok==='g'  ? '✓ Darwin'            : acct.darwin.ok==='a'  ? '⚠ Darwin'            : null,
+    acct.darwinZero.ok==='g'? '✓ Darwinex Zero'   : acct.darwinZero.ok==='a'? '⚠ Darwinex Zero'   : null,
+    acct.axiSelect.ok==='g' ? '✓ AXI Select'      : acct.axiSelect.ok==='a' ? '⚠ AXI Select'      : null,
+  ].filter(Boolean).join(' · ');
+
+  const prompt = `Eres un analista de trading algorítmico experto en StrategyQuant. 
+Analiza estos datos de un WF Matrix y genera un resumen ejecutivo en EXACTAMENTE 3 líneas cortas (máximo 25 palabras por línea). 
+Sin bullets, sin numeración, sin markdown. Solo texto directo y profesional en español.
+
+Datos del run recomendado:
+- Estrategia: ${meta.name} | Par: ${meta.pair} | TF: ${meta.tf}
+- Run: ${run.name} | Score: ${score}/100
+- RetDD Full: ${run.full_rdd.toFixed(2)} | RetDD OOS: ${run.oos_rdd.toFixed(2)} | RetDD IS: ${run.is_rdd.toFixed(2)}
+- CV (planitud): ${run.cv.toFixed(3)} | Degradación IS→OOS: ${run.degradation.toFixed(1)}%
+- RDD mínimo periódico: ${run.rdd_min.toFixed(2)} | % Periodos positivos: ${run.pct_pos.toFixed(0)}%
+- PF OOS: ${run.oos_pf.toFixed(2)} | WR OOS: ${(run.oos_wr*100).toFixed(0)}% | Max DD OOS: ${run.oos_dd.toFixed(2)}%
+- NP Full (IS+OOS): $${Math.round(run.full_np).toLocaleString()}
+- Posición en matriz: ${zoneTxt}
+- Cuentas aptas: ${accountSummary}
+- Tipo de mercado: ${mt.label}
+
+Formato exacto (3 líneas, sin añadir nada más):
+Línea 1: Estado general de la estrategia y run seleccionado
+Línea 2: Fortalezas y debilidades clave (RetDD, CV, degradación)
+Línea 3: Veredicto final sobre qué tipo de cuenta es más adecuada y por qué`;
+
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        messages: [{role:'user', content: prompt}]
+      })
+    });
+    const data = await resp.json();
+    if (data.content && data.content[0]) {
+      const lines = data.content[0].text.trim().split('\n').filter(l=>l.trim());
+      el.innerHTML = lines.map((l,i) => `
+        <div style="padding:${i>0?'8px 0 0':0};${i>0?'border-top:1px solid var(--b0);margin-top:8px':''};font-size:12px;font-family:var(--sans);color:var(--t${i===0?'0':'1'});line-height:1.6;font-weight:${i===0?'500':'400'}">
+          ${l.trim()}
+        </div>`).join('');
+    } else {
+      el.innerHTML = `<span style="color:var(--t2);font-size:11px">Resumen no disponible. Comprueba la conexión.</span>`;
+    }
+  } catch(e) {
+    // Fallback: generate summary from data without AI
+    const rddVerdict = run.oos_rdd >= mt.rdd_oos_green ? 'RetDD OOS excelente' : run.oos_rdd >= mt.rdd_oos_amber ? 'RetDD OOS aceptable' : 'RetDD OOS bajo';
+    const cvVerdict  = run.cv < mt.cv_green ? 'CV bajo (alta consistencia)' : run.cv < mt.cv_amber ? 'CV moderado' : 'CV elevado';
+    const lines = [
+      `${meta.pair} ${meta.tf} — ${run.name} seleccionado con score ${score}/100 ${zoneTxt}.`,
+      `${rddVerdict} (${run.oos_rdd.toFixed(2)}) · ${cvVerdict} (${run.cv.toFixed(3)}) · Degradación IS→OOS ${run.degradation.toFixed(1)}%.`,
+      `${accountSummary || 'Sin cuentas aptas detectadas con los umbrales actuales.'}`,
+    ];
+    el.innerHTML = lines.map((l,i) => `
+      <div style="padding:${i>0?'8px 0 0':0};${i>0?'border-top:1px solid var(--b0);margin-top:8px':''};font-size:12px;font-family:var(--sans);color:var(--t${i===0?'0':'1'});line-height:1.6;font-weight:${i===0?'500':'400'}">
+        ${l}
+      </div>`).join('');
+  }
+}
+
 function renderComparison() {
   const loaded=strategies.map((s,i)=>s?{s,i}:null).filter(Boolean);
   const section=document.getElementById('compare-section');
@@ -1008,13 +1209,80 @@ function renderComparison() {
 // ═══════════════════════════════════════════
 // WEIGHTS PANEL
 // ═══════════════════════════════════════════
+function initMarketPanel() {
+  const el = document.getElementById('market-panel');
+  if (!el) return;
+  el.innerHTML = `
+    <div class="wrow" style="margin-bottom:12px">
+      <div class="wlabel" style="margin-bottom:6px;font-size:10px;color:var(--t2);font-family:var(--mono);text-transform:uppercase;letter-spacing:.08em">Tipo de mercado</div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        ${Object.entries(MARKET_TYPES).map(([k,v])=>`
+          <button onclick="setMarket('${k}')" id="mbt-${k}"
+            style="text-align:left;padding:5px 10px;border-radius:var(--r);border:1px solid var(--b0);
+            background:${currentMarketType===k?'var(--amber-dim)':'transparent'};
+            color:${currentMarketType===k?'var(--amber)':'var(--t2)'};
+            font-size:10px;font-family:var(--mono);transition:all .15s">
+            ${currentMarketType===k?'● ':'○ '}${v.label}
+          </button>`).join('')}
+      </div>
+    </div>
+    <div class="wrow">
+      <div class="wlabel" style="margin-bottom:6px;font-size:10px;color:var(--t2);font-family:var(--mono);text-transform:uppercase;letter-spacing:.08em">Zona de robustez</div>
+      <div style="display:flex;gap:6px">
+        <button onclick="setZone(2)" id="zbt-2"
+          style="flex:1;padding:5px;border-radius:var(--r);border:1px solid var(--b0);
+          background:${zoneSize===2?'var(--green-dim)':'transparent'};
+          color:${zoneSize===2?'var(--green)':'var(--t2)'};font-size:10px;font-family:var(--mono)">
+          2×2 estándar
+        </button>
+        <button onclick="setZone(3)" id="zbt-3"
+          style="flex:1;padding:5px;border-radius:var(--r);border:1px solid var(--b0);
+          background:${zoneSize===3?'var(--green-dim)':'transparent'};
+          color:${zoneSize===3?'var(--green)':'var(--t2)'};font-size:10px;font-family:var(--mono)">
+          3×3 estricto
+        </button>
+      </div>
+      <div style="font-size:9px;color:var(--t3);font-family:var(--mono);margin-top:4px">
+        ${zoneSize===3?'Alineado con tu pipeline SQ (robMinComb 7/9)':'Estándar — bueno para matrices pequeñas'}
+      </div>
+    </div>
+  `;
+}
+
+function setMarket(type) {
+  currentMarketType = type;
+  initMarketPanel();
+  renderAll();
+}
+function setZone(sz) {
+  zoneSize = sz;
+  initMarketPanel();
+  renderAll();
+}
+
+let weightsExpanded = false;
 function initWeightsPanel() {
   const el=document.getElementById('weights-panel');
-  el.innerHTML=Object.keys(weights).map(k=>`
-    <div class="wrow">
-      <div class="wlabel"><span>${WEIGHT_LABELS[k]}</span><span class="wval" id="wv-${k}">${weights[k]}%</span></div>
-      <input type="range" min="0" max="50" value="${weights[k]}" oninput="updateWeight('${k}',this.value)">
-    </div>`).join('');
+  el.innerHTML=`
+    <div onclick="toggleWeights()" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:var(--bg3);border:1px solid var(--b0);border-radius:var(--r);margin-bottom:${weightsExpanded?'8px':'0'}">
+      <span style="font-size:10px;font-family:var(--mono);color:var(--t2)">Ajustar pesos del scoring</span>
+      <span style="font-size:10px;color:var(--t2)">${weightsExpanded?'▲':'▼'}</span>
+    </div>
+    ${weightsExpanded ? `<div style="padding:4px 0">
+      ${Object.keys(weights).map(k=>`
+        <div class="wrow">
+          <div class="wlabel"><span>${WEIGHT_LABELS[k]}</span><span class="wval" id="wv-${k}">${weights[k]}%</span></div>
+          <input type="range" min="0" max="50" value="${weights[k]}" oninput="updateWeight('${k}',this.value)">
+        </div>`).join('')}
+      <button class="btn" style="width:100%;margin-top:6px;font-size:10px" onclick="resetWeights()">↺ Resetear</button>
+    </div>` : `<div style="font-size:9px;color:var(--t3);font-family:var(--mono);padding:4px 10px;line-height:1.6">
+      Los pesos determinan qué run se selecciona cuando hay varios candidatos válidos en la zona 2×2. Por defecto: RetDD OOS 30% · CV 20% · RDD mín 15% · RetDD IS 15% · Degradación 10%.
+    </div>`}
+  `;
+}
+function toggleWeights() {
+  weightsExpanded = !weightsExpanded;
+  initWeightsPanel();
 }
 
 function updateWeight(k,v) {
@@ -1032,4 +1300,5 @@ function resetWeights() {
 // INIT
 // ═══════════════════════════════════════════
 initWeightsPanel();
+initMarketPanel();
 renderSlots();
