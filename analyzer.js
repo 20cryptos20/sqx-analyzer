@@ -129,19 +129,32 @@ function extractMeta(rawName, firstRun, doc) {
   // Try to read symbol and TF directly from XML (most reliable)
   let pair = '—', tf = '—';
   
-  // Method 1: <Symbol uSymbol="USDJPY"> or <Chart symbol="USDJPY_UTC2" timeframe="H4">
+  // Method 1: read directly from XML using getElementsByTagName (more reliable than querySelector with XML)
   if (doc) {
-    const symEl = doc.querySelector('Symbol[uSymbol]');
-    if (symEl) pair = symEl.getAttribute('uSymbol') || '—';
-    
-    const chartEl = doc.querySelector('Chart[timeframe]');
-    if (chartEl) {
-      tf = chartEl.getAttribute('timeframe') || '—';
-      if (!symEl) {
-        // Fallback: extract from symbol attr e.g. USDJPY_UTC2 → USDJPY
-        const sym = chartEl.getAttribute('symbol') || '';
-        const m = sym.match(/^([A-Z0-9]+?)(?:_|$)/);
-        if (m) pair = m[1];
+    // Try <Symbol uSymbol="USDJPY">
+    const symEls = doc.getElementsByTagName('Symbol');
+    for (const el of symEls) {
+      const u = el.getAttribute('uSymbol');
+      if (u && u.length > 0) { pair = u; break; }
+    }
+    // Try <Chart timeframe="H4" symbol="USDJPY_UTC2">
+    const chartEls = doc.getElementsByTagName('Chart');
+    for (const el of chartEls) {
+      const t = el.getAttribute('timeframe');
+      if (t && t.length > 0) { tf = t; }
+      if (pair === '—') {
+        const sym = el.getAttribute('symbol') || '';
+        const m = sym.match(/^([A-Z0-9]+?)(?:_UTC|_|$)/);
+        if (m && m[1].length >= 3) pair = m[1];
+      }
+      if (pair !== '—' && tf !== '—') break;
+    }
+    // Also try <WFSymbol> attribute on RunResult
+    if (pair === '—') {
+      const rr = doc.querySelector('RunResult');
+      if (rr) {
+        const wp = rr.getAttribute('wfSymbol') || rr.getAttribute('WFSymbol') || '';
+        if (wp) { const m = wp.match(/^([A-Z0-9]+?)(?:_|$)/); if(m) pair=m[1]; }
       }
     }
   }
