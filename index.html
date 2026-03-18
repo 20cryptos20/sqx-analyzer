@@ -801,7 +801,7 @@ function computeAccount(run) {
   if(rdd<3.0)    axiFails.push(`RetDD ${rdd.toFixed(2)} — objetivo 7% necesita consistencia`);
   if(degr>30)    axiFails.push(`Degradación ${degr.toFixed(1)}% — riesgo en live`);
   if(!axiCV)     axiFails.push(`CV ${cv.toFixed(3)} — variabilidad alta para DD tan ajustado`);
-  const axiScore = 2*(dd<=5)+2*(rdd>=3)+2*(pf>=m.pf_amber)+1*(degr<30)+1*(cv<=0.9)+1*(rddMin>=0.8);
+  const axiScore = 2*(dd<=5)+2*(rdd>=3)+2*(pf>=m.pf_amber)+1*(degr<30)+1*(cv<=0.9)+1*(rdd_min>=0.8);
   const axiOk    = axiScore>=7?'g':axiScore>=5?'a':'r';
   const axiMsg   = axiOk==='g'?'Apta para AXI Select. DD controlado y RetDD suficiente para el objetivo del 7%.':
                    axiOk==='a'?`Posible con sizing muy conservador (0.5%). Revisar: ${axiFails.join(' · ')}`:
@@ -815,7 +815,7 @@ function computeAccount(run) {
   if(dd>7)        dzFails.push(`DD ${dd.toFixed(1)}% — margen bajo (límite 10%)`);
   if(rdd<2.5)     dzFails.push(`RetDD ${rdd.toFixed(2)} — consistencia insuficiente`);
   if(cv>m.darwin_cv) dzFails.push(`CV ${cv.toFixed(3)} — variabilidad penaliza D-Score`);
-  const dzScore = 2*(dd<=7)+2*(rdd>=2.5)+2*(cv<=m.darwin_cv)+1*(pf>=m.pf_amber)+1*(pct_pos>=80)+1*(degr<=m.degr_amber)+1*(rddMin>=0.8);
+  const dzScore = 2*(dd<=7)+2*(rdd>=2.5)+2*(cv<=m.darwin_cv)+1*(pf>=m.pf_amber)+1*(pct_pos>=80)+1*(degr<=m.degr_amber)+1*(rdd_min>=0.8);
   const dzOk    = dzScore>=8?'g':dzScore>=5?'a':'r';
   const dzMsg   = dzOk==='g'?'Apta para Darwinex Zero. Sin objetivo de profit — solo necesita consistencia y DD controlado.':
                   dzOk==='a'?`Viable en Darwinex Zero. Mejorar: ${dzFails.join(' · ')}`:
