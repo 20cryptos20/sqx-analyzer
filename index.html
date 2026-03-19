@@ -756,91 +756,107 @@ function computeFlags(run) {
 // ACCOUNT SUITABILITY
 // ═══════════════════════════════════════════
 function computeAccount(run) {
-  const {oos_dd:dd,oos_pf:pf,oos_rdd:rdd,cv,rdd_min,pct_pos,degradation:degr}=run;
-  const m=MT();
-  const hard=dd>25||rdd<1.5||pf<1.5||pct_pos<50;
-  const soft=!hard&&(dd>m.dd_amber||rdd<2||cv>1.2);
+  const {oos_dd:dd, oos_pf:pf, oos_rdd:rdd, cv, rdd_min, pct_pos, degradation:degr} = run;
+  const m = MT();
 
-  const pScore=([2*(rdd>=m.rdd_oos_green)+1*(rdd>=m.rdd_oos_amber&&rdd<m.rdd_oos_green),
-    2*(dd<=m.dd_green)+1*(dd<=m.dd_amber&&dd>m.dd_green),
-    2*(pf>=m.pf_green)+1*(pf>=m.pf_amber&&pf<m.pf_green),
-    1*(cv<=m.cv_green),1*(rdd_min>=m.rdd_min_green)]).reduce((a,b)=>a+b,0);
-  const pOk=pScore>=6?'g':pScore>=4?'a':'r';
-
-  const prFails=[];
-  if(dd>m.prop_dd)     prFails.push(`DD ${dd.toFixed(1)}% > 8%`);
-  if(pf<m.pf_amber)    prFails.push(`PF ${pf.toFixed(2)} insuficiente`);
-  if(rdd<m.prop_rdd)   prFails.push(`RetDD ${rdd.toFixed(2)} bajo para challenge`);
-  if(degr>m.degr_amber)prFails.push(`Degradación ${degr.toFixed(1)}% alta`);
-  const prScore=2*(dd<=m.prop_dd)+2*(pf>=m.pf_amber)+2*(rdd>=m.prop_rdd)+1*(degr<=m.degr_amber)+1*(cv<=m.cv_amber)+1*(rdd_min>=m.rdd_min_amber);
-  const prOk=prScore>=7?'g':prScore>=5?'a':'r';
-
-  const darFails=[];
-  if(dd>12)  darFails.push(`DD ${dd.toFixed(1)}% penaliza D-Score`);
-  if(cv>0.8) darFails.push(`CV ${cv.toFixed(3)} inconsistente`);
-  if(rdd<3)  darFails.push(`RetDD ${rdd.toFixed(2)} bajo para Darwin`);
-  if(degr>25)darFails.push(`Degradación ${degr.toFixed(1)}%`);
-  const darScore=2*(dd<=12)+2*(cv<=m.darwin_cv)+2*(rdd>=m.darwin_rdd)+1*(pf>=m.pf_green)+1*(pct_pos>=83)+1*(degr<=m.degr_green)+1*(rdd_min>=m.rdd_min_green);
-  const darOk=darScore>=8?'g':darScore>=5?'a':'r';
-
-  const discardReasons=[];
-  if(hard){
-    if(dd>20)      discardReasons.push(`DD ${dd.toFixed(1)}% excesivo`);
-    if(rdd<1.5)    discardReasons.push(`RetDD ${rdd.toFixed(2)} — retorno no cubre drawdown`);
-    if(pf<1.5)     discardReasons.push(`PF ${pf.toFixed(2)} insuficiente ante costes`);
-    if(pct_pos<50) discardReasons.push(`${pct_pos.toFixed(0)}% periodos positivos`);
+  // ── Discard signal ──────────────────────────────────────
+  const hard = dd>25 || rdd<1.5 || pf<1.5 || pct_pos<50;
+  const soft = !hard && (dd>m.dd_amber || rdd<2 || cv>1.2);
+  const discardReasons = [];
+  if(hard) {
+    if(dd>25)       discardReasons.push(`DD ${dd.toFixed(1)}% excesivo`);
+    if(rdd<1.5)     discardReasons.push(`RetDD ${rdd.toFixed(2)} — retorno no cubre drawdown`);
+    if(pf<1.5)      discardReasons.push(`PF ${pf.toFixed(2)} insuficiente ante costes`);
+    if(pct_pos<50)  discardReasons.push(`Solo ${pct_pos.toFixed(0)}% periodos positivos`);
   }
 
-  // ── AXI Select: DD máx 7%, objetivo 7%, 5% DD diario ──────
-  const axiDD    = dd <= 5;      // safe margin below 7% hard limit
-  const axiRDD   = rdd >= 3.0;
-  const axiDegr  = degr < 30;
-  const axiCV    = cv <= 0.9;
-  const axiFails = [];
-  if(dd>5)       axiFails.push(`DD ${dd.toFixed(1)}% — margen bajo (límite duro 7%)`);
-  if(rdd<3.0)    axiFails.push(`RetDD ${rdd.toFixed(2)} — objetivo 7% necesita consistencia`);
-  if(degr>30)    axiFails.push(`Degradación ${degr.toFixed(1)}% — riesgo en live`);
-  if(!axiCV)     axiFails.push(`CV ${cv.toFixed(3)} — variabilidad alta para DD tan ajustado`);
-  const axiScore = 2*(dd<=5)+2*(rdd>=3)+2*(pf>=m.pf_amber)+1*(degr<30)+1*(cv<=0.9)+1*(rdd_min>=0.8);
-  const axiOk    = axiScore>=7?'g':axiScore>=5?'a':'r';
-  const axiMsg   = axiOk==='g'?'Apta para AXI Select. DD controlado y RetDD suficiente para el objetivo del 7%.':
-                   axiOk==='a'?`Posible con sizing muy conservador (0.5%). Revisar: ${axiFails.join(' · ')}`:
-                   `NO recomendada para AXI Select: ${axiFails.join(' · ')}`;
+  // ── CAPITAL PROPIO ──────────────────────────────────────
+  // Sin restricciones externas de DD. Solo importa ratio riesgo/retorno.
+  const pScore = [
+    2*(rdd>=m.rdd_oos_green) + 1*(rdd>=m.rdd_oos_amber && rdd<m.rdd_oos_green),
+    2*(dd<=m.dd_green)       + 1*(dd<=m.dd_amber && dd>m.dd_green),
+    2*(pf>=m.pf_green)       + 1*(pf>=m.pf_amber && pf<m.pf_green),
+    1*(cv<=m.cv_green),
+    1*(rdd_min>=m.rdd_min_green),
+  ].reduce((a,b)=>a+b,0);
+  const pOk  = pScore>=6?'g':pScore>=4?'a':'r';
+  const pMsg = pOk==='g' ? 'Apta — buen ratio riesgo/retorno para capital propio sin restricciones externas.' :
+               pOk==='a' ? 'Viable con gestión de riesgo conservadora. Ajustar sizing según tolerancia personal.' :
+                           'Drawdown o consistencia insuficientes para capital propio.';
 
-  // ── Darwinex Zero: DD máx 10%, sin objetivo de profit ───
-  const dzDD   = dd <= 7;       // margin below 10%
-  const dzRDD  = rdd >= 2.5;
-  const dzCV   = cv <= m.darwin_cv;
+  // ── DARWIN (broker capital propio) ──────────────────────
+  // Capital tuyo, sin DD externo. Lo que importa es el D-Score:
+  // premia CV bajo, consistencia entre periodos, baja degradación
+  const darFails = [];
+  if(cv>m.darwin_cv)    darFails.push(`CV ${cv.toFixed(3)} — variabilidad alta penaliza D-Score`);
+  if(rdd<m.darwin_rdd)  darFails.push(`RetDD ${rdd.toFixed(2)} — D-Score premia retorno consistente`);
+  if(degr>m.degr_green) darFails.push(`Degradación ${degr.toFixed(1)}% — riesgo divergencia IS→OOS`);
+  if(pct_pos<83)        darFails.push(`${pct_pos.toFixed(0)}% periodos positivos — Darwin penaliza inconsistencia`);
+  const darScore = 3*(cv<=m.darwin_cv) + 2*(rdd>=m.darwin_rdd) + 2*(pct_pos>=83) +
+                   1*(pf>=m.pf_green)  + 1*(degr<=m.degr_green) + 1*(rdd_min>=m.rdd_min_green);
+  const darOk  = darScore>=8?'g':darScore>=5?'a':'r';
+  const darMsg = darOk==='g' ? 'Excelente para Darwin. CV bajo y alta consistencia entre periodos — D-Score alto esperado.' :
+                 darOk==='a' ? `Viable en Darwin. D-Score mejorable: ${darFails.join(' · ')}` :
+                               `D-Score bajo esperado: ${darFails.join(' · ')}`;
+
+  // ── PROP FIRM ───────────────────────────────────────────
+  // Fondeo: 5% DD diario, 10% DD max, objetivo 10% fase 1 / 5% fase 2
+  const prFails = [];
+  if(dd>m.prop_dd)      prFails.push(`DD ${dd.toFixed(1)}% > ${m.prop_dd}% (límite prop)`);
+  if(pf<m.pf_amber)     prFails.push(`PF ${pf.toFixed(2)} insuficiente para cubrir costes reales`);
+  if(rdd<m.prop_rdd)    prFails.push(`RetDD ${rdd.toFixed(2)} bajo para pasar challenge`);
+  if(degr>m.degr_amber) prFails.push(`Degradación ${degr.toFixed(1)}% — riesgo en live`);
+  const prScore = 2*(dd<=m.prop_dd)    + 2*(pf>=m.pf_amber)  + 2*(rdd>=m.prop_rdd) +
+                  1*(degr<=m.degr_amber)+ 1*(cv<=m.cv_amber)  + 1*(rdd_min>=m.rdd_min_amber);
+  const prOk  = prScore>=7?'g':prScore>=5?'a':'r';
+  const prMsg = prOk==='g' ? 'Apta para prop firm. Cumple márgenes de seguridad (5% DD diario · 10% max · obj 10%/5%).' :
+                prOk==='a' ? `Posible con sizing reducido. Revisar: ${prFails.join(' · ')}` :
+                             `NO recomendada para prop firm: ${prFails.join(' · ')}`;
+
+  // ── DARWINEX ZERO ───────────────────────────────────────
+  // Fondeo virtual. SIN límite de DD duro ni objetivo de profit.
+  // El motor de riesgo normaliza a VaR 6.5% mensual.
+  // Lo que importa: consistencia del VaR, CV bajo, degradación baja, periodos positivos.
+  // Un DD alto no cierra la cuenta pero destruye el D-Score y las asignaciones de DarwinIA.
   const dzFails = [];
-  if(dd>7)        dzFails.push(`DD ${dd.toFixed(1)}% — margen bajo (límite 10%)`);
-  if(rdd<2.5)     dzFails.push(`RetDD ${rdd.toFixed(2)} — consistencia insuficiente`);
-  if(cv>m.darwin_cv) dzFails.push(`CV ${cv.toFixed(3)} — variabilidad penaliza D-Score`);
-  const dzScore = 2*(dd<=7)+2*(rdd>=2.5)+2*(cv<=m.darwin_cv)+1*(pf>=m.pf_amber)+1*(pct_pos>=80)+1*(degr<=m.degr_amber)+1*(rdd_min>=0.8);
-  const dzOk    = dzScore>=8?'g':dzScore>=5?'a':'r';
-  const dzMsg   = dzOk==='g'?'Apta para Darwinex Zero. Sin objetivo de profit — solo necesita consistencia y DD controlado.':
-                  dzOk==='a'?`Viable en Darwinex Zero. Mejorar: ${dzFails.join(' · ')}`:
-                  `No óptima para Darwinex Zero: ${dzFails.join(' · ')}`;
+  if(cv>0.8)     dzFails.push(`CV ${cv.toFixed(3)} — motor de riesgo penaliza VaR inestable`);
+  if(rdd<2.5)    dzFails.push(`RetDD ${rdd.toFixed(2)} — consistencia insuficiente para DarwinIA`);
+  if(degr>25)    dzFails.push(`Degradación ${degr.toFixed(1)}% — VaR inconsistente IS→OOS`);
+  if(pct_pos<75) dzFails.push(`${pct_pos.toFixed(0)}% periodos positivos — rating DarwinIA bajo`);
+  // DD no es restricción dura pero alto DD destruye rating
+  if(dd>20)      dzFails.push(`DD ${dd.toFixed(1)}% muy alto — dañará D-Score aunque no cierre cuenta`);
+  const dzScore = 3*(cv<=0.8)       + 2*(rdd>=2.5)      + 2*(pct_pos>=75) +
+                  1*(pf>=m.pf_amber) + 1*(degr<=25)      + 1*(dd<=15);
+  const dzOk  = dzScore>=8?'g':dzScore>=5?'a':'r';
+  const dzMsg = dzOk==='g' ? 'Apta para Darwinex Zero. VaR estable y consistencia alta — buen D-Score esperado y asignaciones DarwinIA.' :
+                dzOk==='a' ? `Viable en D-Zero. El motor de riesgo puede compensar, pero mejorar: ${dzFails.join(' · ')}` :
+                             `Perfil débil para D-Zero. Sin DD límite duro pero: ${dzFails.join(' · ')} — pocas asignaciones esperadas.`;
+
+  // ── AXI SELECT ──────────────────────────────────────────
+  // Fondeo: DD máx 7%, objetivo 7%. El más restrictivo de los cuatro.
+  const axiFails = [];
+  if(dd>5)       axiFails.push(`DD ${dd.toFixed(1)}% — margen muy bajo (límite duro 7%)`);
+  if(pf<m.pf_amber) axiFails.push(`PF ${pf.toFixed(2)} insuficiente para objetivo 7%`);
+  if(rdd<3.0)    axiFails.push(`RetDD ${rdd.toFixed(2)} — necesitas consistencia para el objetivo`);
+  if(degr>30)    axiFails.push(`Degradación ${degr.toFixed(1)}% — riesgo en live con DD tan ajustado`);
+  if(cv>0.9)     axiFails.push(`CV ${cv.toFixed(3)} — variabilidad alta con DD máx 7%`);
+  const axiScore = 2*(dd<=5)        + 2*(rdd>=3.0)       + 2*(pf>=m.pf_amber) +
+                   1*(degr<=30)     + 1*(cv<=0.9)         + 1*(rdd_min>=0.8);
+  const axiOk  = axiScore>=7?'g':axiScore>=5?'a':'r';
+  const axiMsg = axiOk==='g' ? 'Apta para AXI Select. DD controlado y RetDD suficiente para el objetivo del 7%.' :
+                 axiOk==='a' ? `Posible con sizing muy conservador (≤0.5%). Revisar: ${axiFails.join(' · ')}` :
+                               `NO recomendada para AXI Select: ${axiFails.join(' · ')}`;
 
   return {
-    propia:  {ok:pOk, score:pScore, max:8,
-      msg:pOk==='g'?'Apta — buen ratio riesgo/retorno para capital propio.':
-          pOk==='a'?'Viable con gestión de riesgo conservadora.':'Drawdown o consistencia insuficientes.',
-      fails:[]},
-    prop:    {ok:prOk, score:prScore, max:9,
-      msg:prOk==='g'?`Apta para prop firm (5% DD diario · 10% max · objetivo 10% fase 1 / 5% fase 2).`:
-          prOk==='a'?`Posible con sizing reducido. Revisar: ${prFails.join(' · ')}`:
-          `NO recomendada para prop firm: ${prFails.join(' · ')}`,
-      fails:prFails},
-    darwin:  {ok:darOk, score:darScore, max:10,
-      msg:darOk==='g'?'Excelente para Darwinex. CV bajo y DD controlado puntúan en D-Score.':
-          darOk==='a'?`Viable en Darwin con historial largo. Mejorar: ${darFails.join(' · ')}`:
-          `Perfil no óptimo para Darwin: ${darFails.join(' · ')}`,
-      fails:darFails},
-    darwinZero: {ok:dzOk, score:dzScore, max:10, msg:dzMsg, fails:dzFails},
-    axiSelect:  {ok:axiOk, score:axiScore, max:9, msg:axiMsg, fails:axiFails},
-    discard: {level:hard?'hard':soft?'soft':'none', reasons:discardReasons},
+    propia:     {ok:pOk,   score:pScore,  max:8,  msg:pMsg,   fails:[]},
+    darwin:     {ok:darOk, score:darScore,max:10, msg:darMsg, fails:darFails},
+    prop:       {ok:prOk,  score:prScore, max:9,  msg:prMsg,  fails:prFails},
+    darwinZero: {ok:dzOk,  score:dzScore, max:10, msg:dzMsg,  fails:dzFails},
+    axiSelect:  {ok:axiOk, score:axiScore,max:9,  msg:axiMsg, fails:axiFails},
+    discard:    {level:hard?'hard':soft?'soft':'none', reasons:discardReasons},
   };
 }
+
 
 // ═══════════════════════════════════════════
 // CONSECUTIVE
@@ -1160,15 +1176,15 @@ function renderStratView(idx) {
     ${acct.discard.level==='soft'?`<div class="verdict v-warn" style="margin-bottom:10px"><div class="v-icon">⚠️</div><div><div class="v-title">Usar con precaución</div><div class="v-sub">Métricas borderline. Solo capital propio tolerante al riesgo.</div></div></div>`:''}
     <div class="tl-bar">
       <span style="font-size:11px;font-family:var(--mono);color:var(--t2)">IDONEIDAD:</span>
-      ${[['💰 Capital propio',acct.propia],['🧬 Darwin',acct.darwin],['🏢 Prop Firm',acct.prop],['🟢 DarwinZero',acct.darwinZero],['⚡ AXI Select',acct.axiSelect]].map(([lbl,a])=>
+      ${[['💰 Capital propio',acct.propia],['🧬 Darwin',acct.darwin],['🏢 Prop Firm',acct.prop],['🟢 D-Zero',acct.darwinZero],['⚡ AXI Select',acct.axiSelect]].map(([lbl,a])=>
         `<div class="tl-item"><div class="tl-dot" style="background:${FMT[a.ok]}"></div><span style="color:${FMT[a.ok]};font-size:10px">${lbl}</span></div>`).join('')}
       ${acct.discard.level==='hard'?`<span style="margin-left:auto;font-size:11px;font-family:var(--mono);color:var(--red);font-weight:600">🚫 DESCARTAR</span>`:''}
     </div>
     <!-- Capital propio -->
     <div style="font-size:9px;font-family:var(--mono);color:var(--t2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;margin-top:4px">💼 Capital propio</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px;margin-bottom:14px">
-      ${acctCard('Capital Propio','💰','Sin restricciones · sizing libre · sin reglas externas',acct.propia)}
-      ${acctCard('Darwin / Darwinex','🧬','Broker capital propio · D-Score penaliza DD y CV alto',acct.darwin)}
+      ${acctCard('Capital Propio','💰','Sin restricciones externas · DD y sizing a tu criterio',acct.propia)}
+      ${acctCard('Darwin / Darwinex','🧬','Capital propio · D-Score premia CV bajo y consistencia',acct.darwin)}
     </div>
     <!-- Fondeo -->
     <div style="font-size:9px;font-family:var(--mono);color:var(--t2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">🏦 Cuentas de fondeo</div>
@@ -1441,11 +1457,11 @@ async function generateAISummary(idx, run, meta, acct, cons, hasZone, zoneRddAvg
     : `sin zona ${zoneSize}×${zoneSize} válida (selección por score puro)`;
 
   const accountSummary = [
-    acct.propia.ok==='g'  ? '✓ Capital propio'   : acct.propia.ok==='a'  ? '⚠ Capital propio'   : null,
-    acct.prop.ok==='g'    ? '✓ Prop firm'         : acct.prop.ok==='a'    ? '⚠ Prop firm'         : null,
-    acct.darwin.ok==='g'  ? '✓ Darwin'            : acct.darwin.ok==='a'  ? '⚠ Darwin'            : null,
-    acct.darwinZero.ok==='g'? '✓ Darwinex Zero'   : acct.darwinZero.ok==='a'? '⚠ Darwinex Zero'   : null,
-    acct.axiSelect.ok==='g' ? '✓ AXI Select'      : acct.axiSelect.ok==='a' ? '⚠ AXI Select'      : null,
+    acct.propia.ok==='g'    ? '✓ Capital propio'  : acct.propia.ok==='a'    ? '⚠ Capital propio'  : null,
+    acct.darwin.ok==='g'    ? '✓ Darwin'           : acct.darwin.ok==='a'    ? '⚠ Darwin'           : null,
+    acct.prop.ok==='g'      ? '✓ Prop firm'        : acct.prop.ok==='a'      ? '⚠ Prop firm'        : null,
+    acct.darwinZero.ok==='g'? '✓ Darwinex Zero'    : acct.darwinZero.ok==='a'? '⚠ Darwinex Zero'    : null,
+    acct.axiSelect.ok==='g' ? '✓ AXI Select'       : acct.axiSelect.ok==='a' ? '⚠ AXI Select'       : null,
   ].filter(Boolean).join(' · ');
 
   const prompt = `Eres un analista de trading algorítmico experto en StrategyQuant. 
