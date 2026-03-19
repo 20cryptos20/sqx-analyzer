@@ -1041,8 +1041,13 @@ function renderStratView(idx) {
   const s = strategies[idx]; if (!s) return;
 
   // Destroy old charts
-  Object.values(chartReg).forEach(c=>{try{c.destroy()}catch{}});
+  try {
+    Object.values(chartReg).forEach(c=>{try{c.destroy()}catch(e){}});
+  } catch(e) {}
   chartReg={};
+  // Force DOM clear to ensure fresh render
+  const sv = document.getElementById('strat-view');
+  if(sv) sv.innerHTML = '<div style="padding:20px;color:var(--t2);font-family:var(--mono);font-size:11px">⟳ Actualizando...</div>';
 
   const {runs,meta} = s;
   const {run:best,score:bestScore,scores,zone,hasZone} = getBest(runs);
@@ -1155,16 +1160,22 @@ function renderStratView(idx) {
     ${acct.discard.level==='soft'?`<div class="verdict v-warn" style="margin-bottom:10px"><div class="v-icon">⚠️</div><div><div class="v-title">Usar con precaución</div><div class="v-sub">Métricas borderline. Solo capital propio tolerante al riesgo.</div></div></div>`:''}
     <div class="tl-bar">
       <span style="font-size:11px;font-family:var(--mono);color:var(--t2)">IDONEIDAD:</span>
-      ${[['Capital Propio',acct.propia],['Prop Firm',acct.prop],['Darwin',acct.darwin]].map(([lbl,a])=>
-        `<div class="tl-item"><div class="tl-dot" style="background:${FMT[a.ok]}"></div><span style="color:${FMT[a.ok]}">${lbl}</span></div>`).join('')}
+      ${[['💰 Capital propio',acct.propia],['🧬 Darwin',acct.darwin],['🏢 Prop Firm',acct.prop],['🟢 DarwinZero',acct.darwinZero],['⚡ AXI Select',acct.axiSelect]].map(([lbl,a])=>
+        `<div class="tl-item"><div class="tl-dot" style="background:${FMT[a.ok]}"></div><span style="color:${FMT[a.ok]};font-size:10px">${lbl}</span></div>`).join('')}
       ${acct.discard.level==='hard'?`<span style="margin-left:auto;font-size:11px;font-family:var(--mono);color:var(--red);font-weight:600">🚫 DESCARTAR</span>`:''}
     </div>
+    <!-- Capital propio -->
+    <div style="font-size:9px;font-family:var(--mono);color:var(--t2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;margin-top:4px">💼 Capital propio</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px;margin-bottom:14px">
+      ${acctCard('Capital Propio','💰','Sin restricciones · sizing libre · sin reglas externas',acct.propia)}
+      ${acctCard('Darwin / Darwinex','🧬','Broker capital propio · D-Score penaliza DD y CV alto',acct.darwin)}
+    </div>
+    <!-- Fondeo -->
+    <div style="font-size:9px;font-family:var(--mono);color:var(--t2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">🏦 Cuentas de fondeo</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px">
-      ${acctCard('Capital Propio','💼','Sin restricciones externas · sizing libre',acct.propia)}
-      ${acctCard('Prop Firm','🏢','5% DD diario · 10% max DD · Obj 10%→5%',acct.prop)}
-      ${acctCard('Darwin / Darwinex','🧬','D-Score: consistencia y DD',acct.darwin)}
-      ${acctCard('Darwinex Zero','🟢','DD máx 10% · Sin objetivo de profit',acct.darwinZero)}
-      ${acctCard('AXI Select','⚡','DD máx 7% · Objetivo 7%',acct.axiSelect)}
+      ${acctCard('Prop Firm','🏢','5% DD diario · 10% DD max · Obj 10% fase1 / 5% fase2',acct.prop)}
+      ${acctCard('Darwinex Zero','🟢','Fondeo Darwinex · DD máx 10% · Sin objetivo de profit',acct.darwinZero)}
+      ${acctCard('AXI Select','⚡','Fondeo AXI · DD máx 7% · Objetivo 7%',acct.axiSelect)}
     </div></div>
 
     <!-- CONSECUTIVE -->
@@ -1607,12 +1618,13 @@ function initMarketPanel() {
 function setMarket(type) {
   currentMarketType = type;
   initMarketPanel();
-  renderAll();
+  setTimeout(() => renderAll(), 10);
 }
 function setZone(sz) {
   zoneSize = sz;
   initMarketPanel();
-  renderAll();
+  // Small delay to let DOM update before full re-render
+  setTimeout(() => renderAll(), 10);
 }
 
 let weightsExpanded = false;
